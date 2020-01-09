@@ -6,11 +6,7 @@ module Faraday
     class Patron < Faraday::Adapter
       dependency 'patron'
 
-      def call(env)
-        super
-        # TODO: support streaming requests
-        env[:body] = env[:body].read if env[:body].respond_to? :read
-
+      def build_connection(env)
         session = ::Patron::Session.new
         @config_block&.call(session)
         if (env[:url].scheme == 'https') && env[:ssl]
@@ -18,27 +14,26 @@ module Faraday
         end
 
         if (req = env[:request])
-          if req[:timeout]
-            session.timeout = session.connect_timeout = req[:timeout]
-          end
-          session.connect_timeout = req[:open_timeout] if req[:open_timeout]
-
-          if (proxy = req[:proxy])
-            proxy_uri = proxy[:uri].dup
-            proxy_uri.user = proxy[:user] &&
-                             Utils.escape(proxy[:user]).gsub('+', '%20')
-            proxy_uri.password = proxy[:password] &&
-                                 Utils.escape(proxy[:password]).gsub('+', '%20')
-            session.proxy = proxy_uri.to_s
-          end
+          configure_timeouts(session, req)
+          configure_proxy(session, req[:proxy])
         end
 
-        response = begin
-          data = env[:body] ? env[:body].to_s : nil
-          session.request(env[:method], env[:url].to_s,
-                          env[:request_headers], data: data)
-                   rescue Errno::ECONNREFUSED, ::Patron::ConnectionFailed
-                     raise Faraday::ConnectionFailed, $ERROR_INFO
+        session
+      end
+
+      def call(env)
+        super
+        # TODO: support streaming requests
+        env[:body] = env[:body].read if env[:body].respond_to? :read
+
+        response = connection(env) do |session|
+          begin
+            data = env[:body] ? env[:body].to_s : nil
+            session.request(env[:method], env[:url].to_s,
+                            env[:request_headers], data: data)
+          rescue Errno::ECONNREFUSED, ::Patron::ConnectionFailed
+            raise Faraday::ConnectionFailed, $ERROR_INFO
+          end
         end
 
         if (req = env[:request]).stream_response?
@@ -89,6 +84,29 @@ module Faraday
         else
           session.insecure = true
         end
+      end
+
+      def configure_timeouts(session, req)
+        return unless req
+
+        if (sec = request_timeout(:read, req))
+          session.timeout = sec
+        end
+
+        return unless (sec = request_timeout(:open, req))
+
+        session.connect_timeout = sec
+      end
+
+      def configure_proxy(session, proxy)
+        return unless proxy
+
+        proxy_uri = proxy[:uri].dup
+        proxy_uri.user = proxy[:user] &&
+                         Utils.escape(proxy[:user]).gsub('+', '%20')
+        proxy_uri.password = proxy[:password] &&
+                             Utils.escape(proxy[:password]).gsub('+', '%20')
+        session.proxy = proxy_uri.to_s
       end
 
       private

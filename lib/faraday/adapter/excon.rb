@@ -6,11 +6,13 @@ module Faraday
     class Excon < Faraday::Adapter
       dependency 'excon'
 
+      def build_connection(env)
+        opts = opts_from_env(env)
+        ::Excon.new(env[:url].to_s, opts.merge(@connection_options))
+      end
+
       def call(env)
         super
-
-        opts = opts_from_env(env)
-        conn = create_connection(env, opts)
 
         req_opts = {
           method: env[:method].to_s.upcase,
@@ -26,7 +28,7 @@ module Faraday
           end
         end
 
-        resp = conn.request(req_opts)
+        resp = connection(env) { |http| http.request(req_opts) }
         save_response(env, resp.status.to_i, resp.body, resp.headers,
                       resp.reason_phrase)
 
@@ -39,11 +41,6 @@ module Faraday
         raise Faraday::ConnectionFailed, e
       rescue ::Excon::Errors::Timeout => e
         raise Faraday::TimeoutError, e
-      end
-
-      # @return [Excon]
-      def create_connection(env, opts)
-        ::Excon.new(env[:url].to_s, opts.merge(@connection_options))
       end
 
       # TODO: support streaming requests
@@ -95,17 +92,17 @@ module Faraday
       end
 
       def amend_opts_with_timeouts!(opts, req)
-        timeout = req[:timeout]
-        return unless timeout
+        if (sec = request_timeout(:read, req))
+          opts[:read_timeout] = sec
+        end
 
-        opts[:read_timeout] = timeout
-        opts[:connect_timeout] = timeout
-        opts[:write_timeout] = timeout
+        if (sec = request_timeout(:write, req))
+          opts[:write_timeout] = sec
+        end
 
-        open_timeout = req[:open_timeout]
-        return unless open_timeout
+        return unless (sec = request_timeout(:open, req))
 
-        opts[:connect_timeout] = open_timeout
+        opts[:connect_timeout] = sec
       end
 
       def amend_opts_with_proxy_settings!(opts, req)

@@ -16,7 +16,7 @@ module Faraday
             if @connection_options.key?(:pool_size)
               options[:pool_size] = @connection_options[:pool_size]
             end
-            Net::HTTP::Persistent.new(options)
+            Net::HTTP::Persistent.new(**options)
           else
             Net::HTTP::Persistent.new('Faraday')
           end
@@ -73,6 +73,8 @@ module Faraday
       }.freeze
 
       def configure_ssl(http, ssl)
+        return unless ssl
+
         http_set(http, :verify_mode, ssl_verify_mode(ssl))
         http_set(http, :cert_store, ssl_cert_store(ssl))
 
